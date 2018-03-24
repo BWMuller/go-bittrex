@@ -2,11 +2,12 @@ package bittrex
 
 import (
 	"encoding/json"
+	"net/http"
 	"time"
 
 	"github.com/pkg/errors"
-
-	"github.com/thebotguys/signalr"
+	"github.com/OpinionatedGeek/go-cloudflare-scraper"
+	"github.com/OpinionatedGeek/signalr"
 )
 
 type OrderUpdate struct {
@@ -102,7 +103,19 @@ func (b *Bittrex) SubscribeExchangeUpdateExt(market string) (dataCh chan Exchang
 // Updates will be sent to dataCh.
 // To stop subscription, send to, or close 'stop'.
 func (b *Bittrex) SubscribeExchangeUpdate(market string, dataCh chan ExchangeState, stop chan bool) error {
-	const timeout = 5 * time.Second
+	transport := http.DefaultTransport
+	if b.client.httpClient != nil && b.client.httpClient.Transport != nil {
+		transport = b.client.httpClient.Transport
+	}
+
+	scraper, transportErr := scraper.NewTransport(transport)
+	if transportErr != nil {
+		return transportErr
+	}
+
+	c := http.Client{Transport: scraper, Jar: scraper.CookieJar()}
+
+	const timeout = 10 * time.Second
 	client := signalr.NewWebsocketClient()
 	client.OnClientMethod = func(hub string, method string, messages []json.RawMessage) {
 		if hub != WS_HUB || method != "updateExchangeState" {
@@ -111,7 +124,7 @@ func (b *Bittrex) SubscribeExchangeUpdate(market string, dataCh chan ExchangeSta
 		parseStates(messages, dataCh, market)
 	}
 	err := doAsyncTimeout(func() error {
-		return client.Connect("https", WS_BASE, []string{WS_HUB})
+		return client.ConnectWithClient("https", WS_BASE, []string{WS_HUB}, &c)
 	}, func(err error) {
 		if err == nil {
 			client.Close()
