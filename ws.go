@@ -2,8 +2,9 @@ package bittrex
 
 import (
 	"encoding/json"
-	"errors"
 	"time"
+
+	"github.com/pkg/errors"
 
 	"github.com/thebotguys/signalr"
 )
@@ -52,7 +53,7 @@ func doAsyncTimeout(f func() error, tmFunc func(error), timeout time.Duration) e
 	}
 }
 
-func sendStateAsync(dataCh chan<- ExchangeState, st ExchangeState) {
+func sendStateAsync(dataCh chan ExchangeState, st ExchangeState) {
 	select {
 	case dataCh <- st:
 	default:
@@ -67,7 +68,7 @@ func subForMarket(client *signalr.Client, market string) (json.RawMessage, error
 	return client.CallHub(WS_HUB, "QueryExchangeState", market)
 }
 
-func parseStates(messages []json.RawMessage, dataCh chan<- ExchangeState, market string) {
+func parseStates(messages []json.RawMessage, dataCh chan ExchangeState, market string) {
 	for _, msg := range messages {
 		var st ExchangeState
 		if err := json.Unmarshal(msg, &st); err != nil {
@@ -80,10 +81,27 @@ func parseStates(messages []json.RawMessage, dataCh chan<- ExchangeState, market
 	}
 }
 
+// SubscribeExchangeUpdateExt subscribes for updates of the market.
+// Updates will be sent to dataCh.
+// To stop subscription, send to, or close 'stop'.
+func (b *Bittrex) SubscribeExchangeUpdateExt(market string) (dataCh chan ExchangeState, done chan bool, errCh chan error) {
+	dataCh = make(chan ExchangeState, 16)
+	done = make(chan bool)
+	errCh = make(chan error, 1)
+
+	go func() {
+		err := b.SubscribeExchangeUpdate(market, dataCh, done)
+		if err != nil {
+			errCh <- err
+		}
+	}()
+	return
+}
+
 // SubscribeExchangeUpdate subscribes for updates of the market.
 // Updates will be sent to dataCh.
 // To stop subscription, send to, or close 'stop'.
-func (b *Bittrex) SubscribeExchangeUpdate(market string, dataCh chan<- ExchangeState, stop <-chan bool) error {
+func (b *Bittrex) SubscribeExchangeUpdate(market string, dataCh chan ExchangeState, stop chan bool) error {
 	const timeout = 5 * time.Second
 	client := signalr.NewWebsocketClient()
 	client.OnClientMethod = func(hub string, method string, messages []json.RawMessage) {
@@ -100,21 +118,21 @@ func (b *Bittrex) SubscribeExchangeUpdate(market string, dataCh chan<- ExchangeS
 		}
 	}, timeout)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "Error attempting ws async connect")
 	}
 	defer client.Close()
 	var msg json.RawMessage
 	err = doAsyncTimeout(func() error {
 		var err error
 		msg, err = subForMarket(client, market)
-		return err
+		return errors.Wrap(err, "Error subscribing to market events")
 	}, nil, timeout)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "Performing market subscriptoin async task")
 	}
 	var st ExchangeState
 	if err = json.Unmarshal(msg, &st); err != nil {
-		return err
+		return errors.Wrap(err, "Error unmarshalling response")
 	}
 	st.Initial = true
 	st.MarketName = market
@@ -122,6 +140,7 @@ func (b *Bittrex) SubscribeExchangeUpdate(market string, dataCh chan<- ExchangeS
 	select {
 	case <-stop:
 	case <-client.DisconnectedChannel:
+		stop <- false
 	}
 	return nil
 }
