@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/pkg/errors"
 	"github.com/OpinionatedGeek/go-cloudflare-scraper"
 	"github.com/OpinionatedGeek/signalr"
+	"github.com/pkg/errors"
 )
 
 type OrderUpdate struct {
@@ -110,7 +110,7 @@ func (b *Bittrex) SubscribeExchangeUpdate(market string, dataCh chan ExchangeSta
 
 	scraper, transportErr := scraper.NewTransport(transport)
 	if transportErr != nil {
-		return transportErr
+		return errors.Wrap(transportErr, "Error creating new scraper transport")
 	}
 
 	c := http.Client{Transport: scraper, Jar: scraper.CookieJar()}
